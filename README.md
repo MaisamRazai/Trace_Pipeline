@@ -96,7 +96,13 @@ curl http://localhost:8000/checkout
 In the new trace, the `inventory` span (and everything nested under it —
 `payment`, `order`) will visibly balloon, making it obvious in the Grafana
 waterfall that inventory is the bottleneck rather than payment or order
-downstream of it.
+downstream of it. Here's an actual trace from this repo, captured with
+`INVENTORY_EXTRA_DELAY_MS=1200`: total request time is 1.43s, and the
+`inventory GET /inventory/reserve` span alone accounts for 1.38s of it —
+everything downstream (payment: 100.67ms, order: 21.52ms) is comparatively
+negligible.
+
+![Grafana Tempo trace waterfall showing the inventory span dominating a 1.43s checkout trace](docs/images/trace-waterfall-slow.png)
 
 Reset with:
 
