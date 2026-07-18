@@ -1,0 +1,128 @@
+x-otel-env: &otel-env
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+  OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+  OTEL_TRACES_EXPORTER: otlp
+  OTEL_METRICS_EXPORTER: none
+  OTEL_LOGS_EXPORTER: none
+
+services:
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  create-bucket:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin &&
+      mc mb -p local/tempo-traces &&
+      exit 0
+      "
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    user: "0:0" # the named wal volume is root-owned by default; demo-only simplification
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo-wal:/var/tempo/wal
+    depends_on:
+      create-bucket:
+        condition: service_completed_successfully
+    ports:
+      - "3200:3200"
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    depends_on:
+      - tempo
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+
+  gateway:
+    build: ./services/gateway
+    environment:
+      <<: *otel-env
+      OTEL_SERVICE_NAME: gateway
+      CART_URL: http://cart:8000
+    ports:
+      - "8000:8000"
+    depends_on:
+      - otel-collector
+      - cart
+
+  cart:
+    build: ./services/cart
+    environment:
+      <<: *otel-env
+      OTEL_SERVICE_NAME: cart
+      INVENTORY_URL: http://inventory:8000
+    depends_on:
+      - otel-collector
+      - inventory
+
+  inventory:
+    build: ./services/inventory
+    environment:
+      <<: *otel-env
+      OTEL_SERVICE_NAME: inventory
+      PAYMENT_URL: http://payment:8000
+      INVENTORY_EXTRA_DELAY_MS: "${INVENTORY_EXTRA_DELAY_MS:-0}"
+    depends_on:
+      - otel-collector
+      - payment
+
+  payment:
+    build: ./services/payment
+    environment:
+      <<: *otel-env
+      OTEL_SERVICE_NAME: payment
+      ORDER_URL: http://order:8000
+    depends_on:
+      - otel-collector
+      - order
+
+  order:
+    build: ./services/order
+    environment:
+      <<: *otel-env
+      OTEL_SERVICE_NAME: order
+    depends_on:
+      - otel-collector
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - tempo
+
+volumes:
+  minio-data:
+  tempo-wal:

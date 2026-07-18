@@ -1,0 +1,32 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Tag every span that passes through this collector so it's clear which
+  # collector instance (node, in a real DaemonSet) handled it.
+  resource:
+    attributes:
+      - key: deployment.environment
+        value: docker-compose-demo
+        action: upsert
+  batch:
+
+exporters:
+  otlp:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+  debug:
+    verbosity: basic
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [resource, batch]
+      exporters: [otlp, debug]
