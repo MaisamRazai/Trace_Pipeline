@@ -4,6 +4,10 @@ A runnable demo of a distributed tracing pipeline for a microservices
 checkout flow: OpenTelemetry SDKs → OpenTelemetry Collector → Grafana Tempo
 (backed by S3-compatible object storage) → Grafana.
 
+New to distributed tracing? [`docs/HOW_IT_WORKS.md`](docs/HOW_IT_WORKS.md)
+explains the concepts (spans, trace IDs, auto-instrumentation) and walks
+through this exact codebase file by file.
+
 ## The scenario
 
 A user hits "checkout". The request fans out through five services:
