@@ -14,6 +14,7 @@ async def cart_checkout():
     await asyncio.sleep(0.02)  # look up cart contents
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.get(f"{INVENTORY_URL}/inventory/reserve")
+        resp.raise_for_status()
     return {"service": "cart", "downstream": resp.json()}
 
 

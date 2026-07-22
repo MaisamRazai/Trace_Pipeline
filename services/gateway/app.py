@@ -12,6 +12,7 @@ CART_URL = os.getenv("CART_URL", "http://cart:8000")
 async def checkout():
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.get(f"{CART_URL}/cart/checkout")
+        resp.raise_for_status()
     return {"service": "gateway", "downstream": resp.json()}
 
 

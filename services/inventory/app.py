@@ -18,6 +18,7 @@ async def reserve():
     await asyncio.sleep(0.03 + EXTRA_DELAY_MS / 1000)
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.get(f"{PAYMENT_URL}/payment/charge")
+        resp.raise_for_status()
     return {"service": "inventory", "downstream": resp.json()}
 
 

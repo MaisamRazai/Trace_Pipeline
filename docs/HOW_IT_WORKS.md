@@ -62,8 +62,15 @@ never touch this header yourself — the instrumentation libraries do it.
 by hand (`tracer.start_span(...)` around every function you care about), or
 use **auto-instrumentation**, where a library monkey-patches well-known
 frameworks (FastAPI, `httpx`, `requests`, database drivers, ...) so spans get
-created for you with zero code changes. This repo uses auto-instrumentation
-exclusively — see [below](#1-the-service-code) for exactly how.
+created for you with zero code changes. This repo leans on auto-instrumentation
+for the request/response skeleton of every span — see
+[below](#1-the-service-code) for exactly how — and adds a small amount of
+*manual* instrumentation in one place
+([`services/payment/app.py`](../services/payment/app.py)) where
+business-logic detail (*why* a charge was declined) needs attaching to a
+span that auto-instrumentation already started. See
+["Manual instrumentation"](#7-manual-instrumentation-annotating-a-span-auto-instrumentation-cant)
+below.
 
 ### Resource attributes
 
@@ -206,6 +213,46 @@ it out as the waterfall you see in the [README](../README.md#reproducing-checkou
 screenshot — one bar per span, width proportional to duration, nested to
 show parent/child.
 
+### 7. Manual instrumentation: annotating a span auto-instrumentation can't
+
+Auto-instrumentation only knows generic HTTP facts: method, path, status
+code, whether an exception escaped the handler. It has no idea *why* your
+business logic decided something failed. [`services/payment/app.py`](../services/payment/app.py)
+shows the pattern for filling that gap:
+
+```python
+span = trace.get_current_span()
+
+if random.random() < FAILURE_RATE:
+    error = RuntimeError("payment provider declined the charge")
+    span.record_exception(error)
+    span.set_attribute("payment.outcome", "declined")
+    span.set_status(Status(StatusCode.ERROR, str(error)))
+    raise HTTPException(status_code=402, detail="payment declined")
+```
+
+`trace.get_current_span()` reaches into the span FastAPI's instrumentation
+already opened for this request — you don't create a new one, you enrich the
+one that exists. `record_exception` attaches the exception (type, message,
+stack trace) as a span event; `set_attribute` adds a searchable key/value
+(`payment.outcome=declined`) that TraceQL can filter on later; `set_status`
+marks the span as an error explicitly, independent of the HTTP status code
+returned. This is the same three-call pattern (`record_exception` /
+`set_attribute` / `set_status`) you'd reach for anywhere business logic
+decides something is exceptional but doesn't itself throw an unhandled
+Python exception.
+
+Every service that calls downstream also does `resp.raise_for_status()` on
+the response it gets back. That's what turns "payment returned 402" into an
+actual raised exception at each hop — `gateway`'s call to `cart` fails
+because `cart`'s call to `inventory` failed because `inventory`'s call to
+`payment` failed. FastAPI's instrumentation marks each of *those* spans as
+an error too (it caught an unhandled exception), but only the `payment` span
+carries the `payment.outcome` attribute and the original exception — the
+rest are just relaying a failure that started downstream. See
+[README: Reproducing a failed payment](../README.md#reproducing-a-failed-payment)
+to trigger it and see both kinds of error side by side in one trace.
+
 ## Putting it together: why the trace ID makes this all "just work"
 
 Nothing in this repo has a central place that says "here's every span for
@@ -238,6 +285,13 @@ each other.
    `INVENTORY_EXTRA_DELAY_MS=1200 docker compose up -d --build inventory`
    and repeat steps 2–3. Compare the two traces: same shape, wildly
    different `inventory` span width. That's the whole point.
+5. Reset (`docker compose up -d --build inventory`), then run
+   `PAYMENT_FAILURE_RATE=1 docker compose up -d --build payment` and repeat
+   steps 2–3. Now every span in the trace is flagged as an error, but only
+   `payment`'s carries the actual exception and a `payment.outcome`
+   attribute — the rest are just reporting that their downstream call
+   failed. See [section 7](#7-manual-instrumentation-annotating-a-span-auto-instrumentation-cant)
+   above for why.
 
 ## Glossary
 
@@ -248,6 +302,8 @@ each other.
 | Trace ID | 32-hex-char ID shared by every span in one trace |
 | `traceparent` header | Carries the trace ID + parent span ID across an HTTP call |
 | Instrumentation | Code that creates spans; "auto" = a library does it for you |
+| Span status | Explicit OK/ERROR flag on a span, set automatically on an unhandled exception or manually via `span.set_status(...)` |
+| Span event | A timestamped note attached to a span, e.g. an exception recorded via `span.record_exception(...)` |
 | Resource attribute | Metadata tagged on every span from one process, e.g. `service.name` |
 | OTLP | OpenTelemetry Protocol — the wire format spans are sent in |
 | Collector | A process that receives, transforms, and forwards telemetry |

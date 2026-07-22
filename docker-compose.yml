@@ -98,6 +98,7 @@ services:
       <<: *otel-env
       OTEL_SERVICE_NAME: payment
       ORDER_URL: http://order:8000
+      PAYMENT_FAILURE_RATE: "${PAYMENT_FAILURE_RATE:-0}"
     depends_on:
       - otel-collector
       - order

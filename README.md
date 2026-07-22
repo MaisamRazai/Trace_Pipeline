@@ -114,6 +114,35 @@ Reset with:
 docker compose up -d --build inventory
 ```
 
+## Reproducing a failed payment
+
+Latency isn't the only thing worth seeing in a trace — failures are too.
+Force the `payment` service to decline every charge:
+
+```bash
+PAYMENT_FAILURE_RATE=1 docker compose up -d --build payment
+curl -i http://localhost:8000/checkout
+```
+
+`gateway` now returns `500` (each service calls `resp.raise_for_status()` on
+its downstream response, so the failure propagates as a real HTTP error
+rather than getting silently swallowed). In the Grafana waterfall, every span
+in the chain — `gateway`, `cart`, `inventory`, `payment` — shows up flagged
+as an error, but only the `payment` span carries the actual cause: it's
+annotated by hand (`span.record_exception(...)`, `span.set_status(...)`)
+with the exception message `payment provider declined the charge` and a
+`payment.outcome=declined` attribute, since that's business logic no
+auto-instrumentation library could know about. Every span above it is
+red too, but for a different reason — it's just reporting "my downstream
+call failed." That distinction (root cause vs. blast radius) is exactly what
+you lose without tracing and get walking a single request tree with one.
+
+Reset with:
+
+```bash
+docker compose up -d --build payment
+```
+
 ## Tearing down
 
 ```bash
